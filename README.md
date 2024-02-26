@@ -12,8 +12,6 @@
 
 Fork of <i>semla</i> (2024-02-26; semla v.1.1.6-1.1.7) with added modifications to enable processing of sATAC-seq data.  
 
-We should add something here. 
-
 <br>
 
 `semla` is an R package that collects useful tools for Spatially Resolved Transcriptomics data analysis and visualization.
