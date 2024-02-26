@@ -1,4 +1,4 @@
-# semla <img src="man/figures/logo.png" align="right" alt="" width="120" />
+# semla-atac <img src="man/figures/logo.png" align="right" alt="" width="120" />
 
 <!-- badges: start -->
 
@@ -6,6 +6,11 @@
 [![DOI](https://zenodo.org/badge/599058747.svg)](https://zenodo.org/badge/latestdoi/599058747) [![Publication - 10.1093/bioinformatics/btad626](https://img.shields.io/badge/Publication-10.1093%2Fbioinformatics%2Fbtad626-2ea44f)](https://doi.org/10.1093/bioinformatics/btad626)
 
 <!-- badges: end -->
+
+<br>
+<p style="color:red;"><b>Currently in development.</b></p>
+
+Fork of <i>semla</i> (2024-02-26; semla v.1.1.6-1.1.7) with added modifications to enable processing of sATAC-seq data.  
 
 <br>
 
