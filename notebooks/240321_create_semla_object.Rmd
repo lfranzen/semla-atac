@@ -1,0 +1,215 @@
+---
+title: "240321_create_semla_object"
+author: "Nayanika Bhalla"
+date: Sys.Date()
+output: html_document
+---
+# Initialise the script
+
+## Packages and libraries
+Install any packages that may not be present in your workspace.
+```{r}
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("EnsDb.Hsapiens.v86")
+
+
+#BiocManager::install("EnsDb.Mmusculus.v79")
+
+#BiocManager::install("DropletUtils")
+
+#Install devtools from CRAN
+ 
+#install.packages("devtools")
+# Use devtools to install hdf5r and loomR from GitHub
+#devtools::install_github(repo = "hhoeflin/hdf5r")
+#devtools::install_github(repo = "mojaveazure/loomR", ref = "develop")
+
+#remotes::install_github('satijalab/seurat-wrappers')
+
+#devtools::install_github("GreenleafLab/ArchR", ref="master", repos = BiocManager::repositories())
+```
+
+Load libraries.
+```{r}
+# library(GenomeInfoDb)
+# library(EnsDb.Mmusculus.v79)
+# library(EnsDb.Hsapiens.v86)
+# library(BSgenome.Hsapiens.UCSC.hg38)
+# library(Seurat)
+# library(DropletUtils)
+# library(harmony)
+# library(gprofiler2)
+# library(loomR)
+# #library(seuratwrappers)
+# library(ArchR)
+# library(Signac)
+# library(jsonlite)
+# library(parallel)
+# library(ica)
+# library(spdep)
+# library(jpeg)
+# library(STutility)
+# library(ggplot2)
+# library(hexbin)
+# library(STutility)
+# library(biovizBase)
+# library(dplyr)
+# library(semla)
+# library(cli)
+# library(tidyr)
+# library(tools)
+# library(glue)
+# library(rlan)
+```
+
+```{r}
+library(Seurat)
+library(semla)
+library(Signac)
+
+library(hdf5r)
+library(cli)
+library(tools)
+library(dplyr)
+library(tidyr)
+library(glue)
+```
+
+
+
+Define paths to scripts containing functions that we would be using in this script.
+```{r}
+#addArchRGenome("hg38")
+source("~/Desktop/sATAC/scripts/source_satac.R")
+source("~/Desktop/sATAC/scripts/load_chromatin_data.R")
+```
+
+## Directory paths
+
+```{r}
+# DIR_ROOT <- "~/Desktop/sATAC/240321_MGI/Analysis/240312_Mouse_Embryo_E14"
+# DIR_DATA <- file.path(DIR_ROOT,"data")
+# DIR_FIG <- file.path(DIR_ROOT,"figures")
+
+DIR_DATA <- "~/Documents/projects_bioinfo/semla_sATAC/semla-atac/demo_data/mouse_e14"
+```
+
+```{r}
+# set paths to raw data and metadata
+dirs <- list.dirs(DIR_DATA, recursive = F, full.names = F)
+```
+
+# Creating the Infotable
+
+```{r}
+table <- list()
+```
+
+
+```{r}
+# create a table containing paths to raw and meta data (i.e., output from cellranger + spatial info)
+#i corresponds to the sample name
+
+# for(i in dirs){
+#    table[[i]] <- c(matrix = Sys.glob(file.path(DIR_DATA, i, "outs", "raw_peak_bc_matrix.h5")),
+#                   annotation_files = Sys.glob(file.path(DIR_DATA, i, "outs", "singlecell.csv")),
+#                   fragments = Sys.glob(file.path(DIR_DATA, i, "outs", "fragments.tsv.gz")),
+#                   spotfiles = Sys.glob(file.path(DIR_DATA, i, "outs", "*_alignment_positions_list.csv")),
+#                   imgs = Sys.glob(file.path(DIR_DATA,i,"outs","*-Spot000001.jpg")),
+#                   bed = Sys.glob(file.path(DIR_DATA,i,"outs","peaks.bed")),
+#                   json = Sys.glob(file.path(DIR_DATA,i,"outs","*_alignment.json")),
+#                   scalefactor=1
+#                   )
+# }
+```
+
+```{r}
+for(i in dirs){
+   table[[i]] <- c(matrix = Sys.glob(file.path(DIR_DATA, i, "raw_peak_bc_matrix.h5")),
+                  annotation_files = Sys.glob(file.path(DIR_DATA, i, "singlecell.csv")),
+                  fragments = Sys.glob(file.path(DIR_DATA, i, "fragments.tsv.gz")),
+                  spotfiles = Sys.glob(file.path(DIR_DATA, i, "tissue_positions_new.csv")),  # _alignment_positions_list.csv  # "*_alignment.csv"
+                  imgs = Sys.glob(file.path(DIR_DATA, i,"*-Spot000001.jpg")),
+                  bed = Sys.glob(file.path(DIR_DATA, i,"peaks.bed")),
+                  json = Sys.glob(file.path(DIR_DATA, i,"*_alignment.json")),
+                  scalefactor=1
+                  )
+}
+```
+
+
+```{r}
+infoTable <- do.call("rbind", table) %>% as.data.frame() 
+
+object <- list(md = list(),
+               frag = list(),
+               counts = list())
+```
+
+```{r}
+infoTable$scalefactor <- as.numeric(infoTable$scalefactor) 
+```
+
+# Create coordinate spotfiles
+
+```{r}
+# image_info <- LoadImageInfo(infoTable$imgs)
+```
+
+
+```{r}
+coords <- read.csv(file = infoTable$spotfiles, header = FALSE) 
+coords <- coords |>
+      as_tibble() |>
+      setNames(nm = c("barcode", "selected", "y", "x", "pxl_row_in_fullres", "pxl_col_in_fullres")) |>
+      mutate(across(pxl_col_in_fullres:pxl_row_in_fullres, ~as.integer(.x)))
+
+head(coords)
+```
+
+
+```{r}
+coordinates <- LoadSpatialCoordinates(coordinatefiles = infoTable$spotfiles,
+                                      remove_spots_outside_tissue = TRUE)
+```
+
+
+```{r}
+# coordinates <- LoadAndProcessCoords(
+#     spotfiles = ,
+#     image_info,
+#     remove_spots_outside_tissue = TRUE,
+#     verbose = TRUE
+#     )
+```
+
+```{r}
+```
+
+```{r}
+chr_E14 <- LoadChromatinFromMatrix(samplefiles = infoTable$matrix, fragmentfiles = infoTable$fragments)
+```
+
+
+
+# Test fiaal function
+
+```{r}
+se_E14 <- ReadChromatinData(infoTable, assay="ATAC", remove_spots_outside_tissue = TRUE)
+```
+
+
+Check object
+
+```{r}
+se_E14@meta.data |> head()
+```
+
+```{r}
+MapFeatures(se_E14, features = "nCount_ATAC")
+MapFeatures(object, features = "nCount_ATAC", override_plot_dims = T)
+```
+
+

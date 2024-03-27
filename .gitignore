@@ -4,7 +4,6 @@
 .RData
 .Ruserdata
 .renvignore
-notebooks/
 presentations/
 package.json
 webpack.config.js

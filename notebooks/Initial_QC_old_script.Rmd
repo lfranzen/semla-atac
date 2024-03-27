@@ -1,0 +1,289 @@
+---
+title: "Initial_Quality_control_old_script"
+output: html_document
+date: "2024-03-21"
+---
+
+```{r}
+library(GenomeInfoDb)
+library(EnsDb.Mmusculus.v79)
+library(EnsDb.Hsapiens.v86)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(Seurat)
+library(DropletUtils)
+library(harmony)
+library(gprofiler2)
+library(loomR)
+#library(seuratwrappers)
+library(ArchR)
+library(Signac)
+library(jsonlite)
+library(parallel)
+library(ica)
+library(spdep)
+library(jpeg)
+library(STutility)
+library(ggplot2)
+library(hexbin)
+library(STutility)
+library(biovizBase)
+library(dplyr)
+library(semla)
+library(cli)
+library(tidyr)
+library(tools)
+library(glue)
+```
+
+Define paths to scripts containing functions that we would be using in this script.
+```{r}
+#addArchRGenome("hg38")
+source("~/Desktop/sATAC/scripts/source_satac.R")
+source("~/Desktop/sATAC/scripts/load_chromatin_data.R")
+```
+
+##Directory paths
+
+```{r}
+DIR_ROOT <- "~/Desktop/sATAC/240321_MGI/Analysis/240312_Mouse_Embryo_E14"
+DIR_DATA <- file.path(DIR_ROOT,"data")
+DIR_FIG <- file.path(DIR_ROOT,"figures")
+```
+
+```{r}
+# set paths to raw data and metadata
+dirs <- list.dirs(DIR_DATA, recursive = F, full.names = F)
+```
+
+```{r}
+table <- list()
+```
+
+```{r}
+# create a table containing paths to raw and meta data (i.e., output from cellranger + spatial info)
+for(i in dirs){
+   table[[i]] <- c(samples = Sys.glob(file.path(DIR_DATA, i, "outs", "raw_peak_bc_matrix.h5")),
+                  singlecell = Sys.glob(file.path(DIR_DATA, i, "outs", "singlecell.csv")),
+                  fragments = Sys.glob(file.path(DIR_DATA, i, "outs", "fragments.tsv.gz")),
+                  tissue_paths = Sys.glob(file.path(DIR_DATA, i, "outs", "*_alignment.tsv")),
+                  spotfiles = Sys.glob(file.path(DIR_DATA, i, "outs", "*_alignment.csv")))
+}
+```
+
+```{r}
+#This will give me a table with data from each replicate but each table will represent like 2 different excel (hojas)
+infoTable <- do.call("rbind", table) %>% as.data.frame() #create a unique (folio excel) table with replicates path information
+
+object <- list(md = list(),
+               frag = list(),
+               counts = list())
+```
+
+
+
+```{r}
+gr_15 <- read.table(
+  file = "/Users/nayanikabhalla/Desktop/Adipose/sATAC/240127_test run/Analysis/E15_ALL.bed", # I added meta command so R can find the file inside this folder
+  col.names = c("chr", "start", "end")
+) %>% makeGRangesFromDataFrame()
+
+gr <- gr_15
+```
+
+```{r}
+# create fragment objects and count matrices for each section separately
+for(i in seq_along(dirs)){
+  folder = strsplit(infoTable$samples[i], "raw_peak_bc_matrix.h5") %>% unlist()
+  # load metadata
+  object$md[[i]] <- read.table(
+    file = infoTable$singlecell[i],
+    stringsAsFactors = FALSE,
+    sep = ",",
+    header = TRUE,
+    row.names = 1
+  )[-1, ] # remove the first row (NO_BARCODE)
+  
+  # create fragment objects
+  object$frag[[i]] <- CreateFragmentObject(
+    path = infoTable$fragments[i],
+    cells = rownames(object$md[[i]])
+  )
+  
+  if (file.exists(paste0(folder, "encode_peak_bc_matrix_gr15.h5"))) {
+    message("File exists.")
+    object$counts[[i]] <- Read10X_h5(paste0(folder, "encode_peak_bc_matrix_gr15.h5"))
+    
+  } else {
+    
+    # make count matrix
+    object$counts[[i]] <- FeatureMatrix(
+      fragments = object$frag[[i]],
+      features = gr,
+      cells = rownames(object$md[[i]])
+    )
+    
+    write10xCounts(path = paste0(folder, "encode_peak_bc_matrix_gr15.h5"),
+                   x = object$counts[[i]],
+                   type = "HDF5")
+  }
+  
+}
+```
+
+```{r}
+for(i in seq_along(dirs)){
+  spotfile <- read.table(infoTable$tissue_paths[i], sep = "\t", header = T)
+  
+  spotfile_tissue <- cbind(
+    spotfile$row, #array_row
+    spotfile$col, #array_col
+    spotfile$x, #pxl_row_in_fullres
+    spotfile$y #pxl_col_in_fullres
+  ) %>% as.data.frame()
+  tissue <- rep(1, nrow(spotfile_tissue))
+  spotfile_tissue <- cbind(tissue, spotfile_tissue)
+  rownames(spotfile_tissue) <- paste0(spotfile$barcode, "-1")
+  
+  # save new tissue position file with the correct columns for creating STutility object
+  write.csv(spotfile_tissue, 
+            paste0(strsplit(infoTable$tissue_paths[i], "tsv"), "csv"))
+  
+}
+```
+
+
+```{r}
+# load spotfiles
+tissue_md <- list()
+object$mtx <- list()
+
+for(i in seq_along(dirs)){
+  spotfile_path <-   paste0(strsplit(infoTable$tissue_paths[i], "tsv"), "csv")
+  spotfile <- read.csv(spotfile_path,
+                       col.names = c("barcode", "tissue", "y", "x", "pixel_y", "pixel_x")
+  )
+  
+  mtx <- object$counts[[i]]
+  #mtx <- mtx[,colnames(mtx) %in% spotfile$barcode]
+  # filter count matrix to retain only spots overlaying tissue
+  
+  object$mtx[[i]] <- mtx
+  
+  #save spot info in a list
+  tissue_md[[i]] <- spotfile
+}
+
+signac_object <- list()
+```
+
+Create an object with the spatial information
+```{r}
+# create signac objects for each section and run normalization and dimensionality reduction
+for(i in 1:length(dirs)){ #change number depending on the number of samples we have
+  assay <- CreateChromatinAssay(object$mtx[[i]], 
+                                fragments = object$frag[[i]])
+  
+  signac_object[[i]] <- CreateSeuratObject(assay, 
+                                           assay = "peaks", 
+                                           meta.data=object$md[[i]])
+  signac_object[[i]]$section <- rownames(infoTable)[i]
+  signac_object[[i]]$sample <- i
+}
+```
+
+merge in one object
+```{r}
+#Merge objects
+combined <- merge(
+  x = signac_object[[1]],
+  y = c(signac_object[2:length(dirs)])
+)
+
+#Add spatial data to meta
+for(i in seq_along(dirs)){
+  tissue_md[[i]]$barcode <- paste0(tissue_md[[i]]$barcode, "_", i)
+  rownames(tissue_md[[i]]) <- tissue_md[[i]]$barcode 
+  tissue_md[[i]]$tissue <- i
+}
+```
+
+Plots TissuevsNontissue
+```{r}
+tissue_md_combined <- do.call(rbind, tissue_md) 
+rownames(tissue_md_combined) <- tissue_md_combined$barcode
+combined <- AddMetaData(combined, tissue_md_combined)
+
+combined$tissue <- ifelse(is.na(combined$x), "Empty", "tissue")
+```
+
+```{r}
+png(filename = file.path(DIR_FIG,"240321_V12N16-098_violin_peak_region_fragments.png"), width = 800, height=600)
+VlnPlot(combined, "peak_region_fragments", group.by = "section")
+dev.off()
+```
+
+```{r}
+png(filename = file.path(DIR_FIG,"240321_V12N16-098_violin_TSS_fragments.png"), width = 800, height=600)
+VlnPlot(combined, "TSS_fragments", group.by="section")
+dev.off()
+```
+
+```{r}
+png(filename = file.path(DIR_FIG,"240321_V12N16-098_violin_passed_filters.png"), width = 800, height=600)
+VlnPlot(combined, "passed_filters", group.by = "section")
+dev.off()
+```
+
+
+```{r}
+png(filename = file.path(DIR_FIG,"240321_V12N16-098_violin_tissue_vs_nontissue.png"), width = 800, height=600)
+VlnPlot(combined, "passed_filters", split.by= "tissue", group.by = "section", cols = c("#f5d3c4","#4de8e5"))
+dev.off()
+```
+
+```{r}
+png(filename = file.path(DIR_FIG,"240321_V12N16-098_violin_tissue_vs_nontissue_TSS.png"), width = 800, height=600)
+VlnPlot(combined, "TSS_fragments", split.by= "tissue", group.by = "section", cols = c("#f5d3c4","#4de8e5"))
+dev.off()
+```
+
+
+Plot spatially.
+```{r}
+meta <- read.table(file.path(DIR_DATA,"240312_V12N16-098_D1","outs","singlecell.csv"), sep = ",", header = T)[-1,]
+tissue_df <- read.table(file.path("~/Desktop/Adipose/sATAC/240127_test run/Analysis/visium-v1_coordinates.txt"))
+tissue_df$V1 <- paste0(tissue_df$V1, "-1")
+colnames(tissue_df) <- c("barcode", "x", "y")
+meta <- merge(meta, tissue_df, by = "barcode")
+```
+
+
+```{r}
+png(filename = file.path(DIR_FIG,"240321_V12N16-098_D1_spatial_TSS_fragments.png"), width = 800, height=600)
+ggplot(meta, aes(x=y, y=x)) + 
+  geom_point(aes(color = TSS_fragments), size=2.75) +
+  scale_color_gradient(low = "white",high = "#AE017E", limits=c(0,2500))
+dev.off()
+```
+
+
+```{r}
+png(filename = file.path(DIR_FIG,"240321_V12N16-098_D1_spatial_total_fragments.png"), width = 770, height=600)
+ggplot(meta, aes(x=y, y=x)) + 
+  geom_point(aes(color = total), size=2.75) +
+  scale_color_gradient(low = "white",high = "#AE017E",  limits=c(0,60000))
+dev.off()
+```
+
+```{r}
+meta$pct_mito <- meta$mitochondrial/meta$passed_filters
+
+png(filename = file.path(DIR_FIG,"240321_V12N16-098_D1_spatial_mito_fragments.png"), width = 770, height=600)
+ggplot(meta, aes(x=y, y=x)) + 
+  geom_point(aes(color = pct_mito), size=2.75) +
+  scale_color_gradient(low = "white", high = "#AE017E", limits=c(0, 0.35))
+dev.off()
+```
+
+
+
