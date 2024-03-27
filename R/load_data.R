@@ -248,7 +248,7 @@ LoadSpatialCoordinates <- function (
       }
       coords <- arrow::read_parquet(file = coordinatefiles[i], as_data_frame = TRUE, mmap = TRUE)
     }
-    if (!c("barcode") %in% colnames(coords)) {
+    if (!c("barcode") %in% colnames(coords)) { # TO DO: Check this - should move to within "term==csv" statement Does parquet files always have correct col-names?
       coords <- read.csv(file = coordinatefiles[i], header = FALSE) 
     }
     coords <- coords |>
