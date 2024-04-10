@@ -433,7 +433,7 @@ LoadAndProcessCoords <- function(
 
 
 
-  #' Read spatial ATAC-seq data
+   #' Read spatial ATAC-seq data
   #'
   #' This function serves as a wrapper for \code{\link{LoadChromatinFromMatrix}} or 
   #' \code{\link{LoadChromatinFromFragments}}and \code{\link{LoadSpatialCoordinates}} to 
@@ -486,6 +486,9 @@ LoadAndProcessCoords <- function(
   #' @param assay Assay name (default = "ATAC")
   #' @param remove_spots_outside_tissue Should spots outside the tissue be removed or not
   #' @param verbose Print messages
+  #' @param annotations GRanges object or NULL if using EnsDb
+  #' @param genomeVersion Default genome version, adjust as needed (e.g. 'mm10' for mus musculus, 'hg19' for homo sapiens)
+  #' @param ensDb Pass EnsDB object directly
   #' @param ... Parameters passed to \code{\link{CreateSeuratObject}}
   #'
   #' @import cli
@@ -505,11 +508,16 @@ LoadAndProcessCoords <- function(
     assay = "ATAC",
     remove_spots_outside_tissue = TRUE,
     verbose = TRUE,
+    annotations = NULL, # GRanges or NULL if using EnsDb
+    genomeVersion = "hg19", # Default genome version, adjust as needed
+    ensDb = NULL, # Optionally, pass EnsDb object directly
     ...
   ) {
 
     
-    if (verbose) cli_h2("Reading spatial chromatin data")
+    if (verbose){
+      cli::cli_h1("🌟 Reading Spatial Chromatin Data 🌟")
+    }
     
     # Check infoTable
     if (!all(c("fragments", "imgs", "spotfiles") %in% colnames(infoTable)))
@@ -569,12 +577,13 @@ LoadAndProcessCoords <- function(
       abort(glue("The following files are missing: {paste(missing_files, collapse = ', ')}"))
     }
     
+    if (verbose) cli::cli_alert_success("All files check out! 📂✅")
     
     # adapted from AddAnnotationCSV file, remove the possible NO_BARCODE row
     # Check if an annotation_files column was provided
     if ("annotation_files" %in% colnames(infoTable)) {
       annfiles <- infoTable |> pull(all_of("annotation_files"))
-      if (verbose) cli_alert_info("Loading annotatons from CSV files")
+      if (verbose) cli_alert_info("Loading annotations from CSV files")
       ann <- data.frame()
       for(i in seq_along(along.with = annfiles)){
         if (is.na(annfiles[i]))
@@ -600,10 +609,23 @@ LoadAndProcessCoords <- function(
       add_annotations <- FALSE
     }
     
+    
     # Keep additional infoTable columns
     additionalMetaData <- infoTable |> dplyr::select(-any_of(c("fragments", "bed", "matrix", "imgs", "spotfiles", "json", "scalefactor")))
     if(ncol(additionalMetaData) < 1){
       additionalMetaData <- NULL
+    }
+    
+    # Check for EnsDb object and convert to annotations if present
+    if (!is.null(ensDb)) {
+      # Convert EnsDb to GRanges
+      annotations <- suppressWarnings(Signac::GetGRangesFromEnsDb(ensdb = ensDb))
+      # Adjust seqlevels and genome based on the provided genome version
+      seqlevelsStyle(annotations) <- 'UCSC'
+      genome(annotations) <- genomeVersion
+      if (genomeVersion %in% c("hg19", "mm10")) {
+        seqlevels(annotations) <- paste0('chr', seqlevels(annotations))
+      }
     }
     
     # Read image info
@@ -611,6 +633,10 @@ LoadAndProcessCoords <- function(
     
     # Read spot coordinates
     # The standard spaceranger output 
+    if (verbose) {
+      cli::cli_alert_info("Transforming coordinates into a magical map 🗺️✨")
+    }
+    
     coordinates <- LoadSpatialCoordinates(coordinatefiles = infoTable$spotfiles,
                                           remove_spots_outside_tissue = remove_spots_outside_tissue,
                                           verbose = verbose)
@@ -709,23 +735,49 @@ LoadAndProcessCoords <- function(
     }
     
      
-
+    if (!is.null(annotations)) {
+      # Directly adding annotations to the ChromatinAssay if possible
+      # Or, if the assay is already created, use the following line to add annotations
+      Annotation(chromatinAssay) <- annotations
+    }
     
     # Create a Seurat object from expression matrix
+    if (verbose) cli::cli_alert_info("Creating Seurat object...")
     object <- CreateSeuratObject(chromatinAssay,
                                  assay = assay,
                                  meta.data = metaData,
                                  ...)
-    if (verbose) cli_alert_info("Created `Seurat` object")
+    if (verbose) cli::cli_alert_success("Seurat object creation successful.")
+    
+    # If annotations were not directly added to ChromatinAssay, add them to the Seurat object here
+    if (!is.null(annotations)) {
+      Annotation(object) <- annotations
+    }
+    
+    # Extract Spot IDs from the newly created Seurat object
+    seurat_spot_ids <- colnames(object)
+    
+    #Filter 'coordinates' to include only spots present in Seurat object
+    if (verbose) {
+      cli::cli_alert_info("Aligning spatial and chromatin data...")
+    }
+    
+    coordinates_filtered <- coordinates %>%
+      dplyr::filter(barcode %in% seurat_spot_ids)
+    
+    if (verbose) {
+      cli::cli_alert_success("Coordinates filtered: {nrow(coordinates_filtered)} spots aligned.")
+    }
     
     # Create a Staffli object
+    if (verbose) cli::cli_alert_info("Creating Staffli object...")
     staffli_object <- CreateStaffliObject(imgs = infoTable$imgs,
-                                          meta_data = coordinates |>
+                                          meta_data = coordinates_filtered |>
                                             ungroup() |> 
                                             dplyr::select(all_of(c("barcode", "pxl_col_in_fullres", "pxl_row_in_fullres", "sampleID"))),
                                           image_info = image_info,
                                           scalefactors = scalefactors)
-    if (verbose) cli_alert_info("Created `Staffli` object")
+    if (verbose) cli::cli_alert_success("Staffli object ready.")
     
     # Place Staffli object inside the tools slot of the Seurat object
     object@tools$Staffli <- staffli_object
@@ -739,4 +791,3 @@ LoadAndProcessCoords <- function(
                                         " features and {cli::col_br_magenta(ncol(object))} spots"))
     return(object)
   }
-  
